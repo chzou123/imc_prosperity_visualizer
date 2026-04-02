@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { UploadCloud, Activity, DollarSign, Box } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line, Legend, ComposedChart, Scatter, Brush } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, Legend, ComposedChart, Scatter, Brush } from 'recharts';
 import { parseZipLog, ParsedData } from './utils/parser';
 
 const DepthTooltip = ({ active, payload }: any) => {
