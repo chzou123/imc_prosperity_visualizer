@@ -1,7 +1,43 @@
 import { useState, useCallback } from 'react';
 import { UploadCloud, Activity, DollarSign, Box } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line, Legend, ComposedChart } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, LineChart, Line, Legend, ComposedChart, Scatter, Brush } from 'recharts';
 import { parseZipLog, ParsedData } from './utils/parser';
+
+const DepthTooltip = ({ active, payload }: any) => {
+  if (active && payload && payload.length) {
+    const data = payload[0].payload;
+    return (
+      <div className="tooltip-container">
+        <div className="tooltip-header">Timestamp: {data.timestamp}</div>
+        
+        <div style={{ color: 'var(--tomato)', marginBottom: '8px' }}>
+          {data.ask_price_3 != null && <div className="tooltip-row"><span>Ask 3: {data.ask_price_3}</span><span>Vol: {data.ask_volume_3}</span></div>}
+          {data.ask_price_2 != null && <div className="tooltip-row"><span>Ask 2: {data.ask_price_2}</span><span>Vol: {data.ask_volume_2}</span></div>}
+          {data.ask_price_1 != null && <div className="tooltip-row"><span>Ask 1: {data.ask_price_1}</span><span>Vol: {data.ask_volume_1}</span></div>}
+        </div>
+        
+        <div style={{ color: 'var(--accent)', margin: '8px 0', borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', padding: '4px 0' }}>
+          <div className="tooltip-row"><span>Mid Price: {data.mid_price}</span></div>
+        </div>
+        
+        <div style={{ color: 'var(--emerald)', marginTop: '8px' }}>
+          {data.bid_price_1 != null && <div className="tooltip-row"><span>Bid 1: {data.bid_price_1}</span><span>Vol: {data.bid_volume_1}</span></div>}
+          {data.bid_price_2 != null && <div className="tooltip-row"><span>Bid 2: {data.bid_price_2}</span><span>Vol: {data.bid_volume_2}</span></div>}
+          {data.bid_price_3 != null && <div className="tooltip-row"><span>Bid 3: {data.bid_price_3}</span><span>Vol: {data.bid_volume_3}</span></div>}
+        </div>
+
+        {(data.buy_exec_vol > 0 || data.sell_exec_vol > 0) && (
+          <div style={{ marginTop: '12px', paddingTop: '8px', borderTop: '1px solid var(--border)' }}>
+             <div style={{ fontWeight: 'bold' }}>Trade Fills</div>
+             {data.buy_exec_vol > 0 && <div className="tooltip-row" style={{ color: 'var(--emerald)' }}><span>Bought:</span> <span>{data.buy_exec_vol} @ {data.buy_exec_price.toFixed(2)}</span></div>}
+             {data.sell_exec_vol > 0 && <div className="tooltip-row" style={{ color: 'var(--tomato)' }}><span>Sold:</span> <span>{data.sell_exec_vol} @ {data.sell_exec_price.toFixed(2)}</span></div>}
+          </div>
+        )}
+      </div>
+    );
+  }
+  return null;
+}
 
 function App() {
   const [data, setData] = useState<ParsedData | null>(null);
@@ -51,9 +87,35 @@ function App() {
     );
   }
 
-  const activities = data.activities[activeProduct] || [];
+  const baseActivities = data.activities[activeProduct] || [];
   const positions = data.positions[activeProduct] || [];
   const pnl = data.pnl[activeProduct] || [];
+  const activeTrades = data.trades[activeProduct] || [];
+
+  // Merge Trades locally for the dashboard rendering
+  const activities = baseActivities.map(act => {
+    const tradesAtTime = activeTrades.filter(t => t.timestamp === act.timestamp);
+    let buyVol = 0, buyCost = 0, sellVol = 0, sellCost = 0;
+    
+    for (const t of tradesAtTime) {
+      if (t.buyer === "SUBMISSION") {
+          buyVol += t.quantity;
+          buyCost += t.quantity * t.price;
+      }
+      if (t.seller === "SUBMISSION") {
+          sellVol += t.quantity;
+          sellCost += t.quantity * t.price;
+      }
+    }
+    
+    return {
+      ...act,
+      buy_exec_vol: buyVol,
+      buy_exec_price: buyVol > 0 ? buyCost / buyVol : null,
+      sell_exec_vol: sellVol,
+      sell_exec_price: sellVol > 0 ? sellCost / sellVol : null,
+    };
+  });
 
   // Metrics
   const lastActivity = activities[activities.length - 1];
@@ -99,30 +161,39 @@ function App() {
            </div>
         </div>
 
-        <div className="chart-grid chart-grid-2">
+        <div className="chart-grid">
+           {/* Order Book with Trades */}
            <div className="glass-panel chart-container">
-             <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>Order Book & Mid Price</h3>
+             <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>Market Depth & Executions</h3>
              <ResponsiveContainer width="100%" height="100%">
-               <LineChart data={activities}>
+               <ComposedChart data={activities} syncId="prosperitySync">
                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} />
+                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={['dataMin', 'dataMax']} />
                  <YAxis domain={['auto', 'auto']} stroke="var(--text-muted)" fontSize={12} width={60} />
-                 <RechartsTooltip 
-                   contentStyle={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px' }} 
-                   itemStyle={{ color: 'var(--text)' }}
-                 />
+                 <RechartsTooltip content={<DepthTooltip />} />
                  <Legend />
+                 
+                 <Line type="stepAfter" dataKey="ask_price_3" stroke="rgba(239, 68, 68, 0.4)" dot={false} strokeWidth={1} name="Ask 3" />
+                 <Line type="stepAfter" dataKey="ask_price_2" stroke="rgba(239, 68, 68, 0.7)" dot={false} strokeWidth={1} name="Ask 2" />
                  <Line type="stepAfter" dataKey="ask_price_1" stroke="var(--tomato)" dot={false} strokeWidth={2} name="Ask 1" />
+                 
                  <Line type="stepAfter" dataKey="mid_price" stroke="var(--accent)" dot={false} strokeWidth={2} name="Mid Price" />
+                 
                  <Line type="stepAfter" dataKey="bid_price_1" stroke="var(--emerald)" dot={false} strokeWidth={2} name="Bid 1" />
-               </LineChart>
+                 <Line type="stepAfter" dataKey="bid_price_2" stroke="rgba(16, 185, 129, 0.7)" dot={false} strokeWidth={1} name="Bid 2" />
+                 <Line type="stepAfter" dataKey="bid_price_3" stroke="rgba(16, 185, 129, 0.4)" dot={false} strokeWidth={1} name="Bid 3" />
+
+                 <Scatter dataKey="buy_exec_price" fill="var(--emerald)" shape="star" name="Buy Fill" />
+                 <Scatter dataKey="sell_exec_price" fill="var(--tomato)" shape="star" name="Sell Fill" />
+               </ComposedChart>
              </ResponsiveContainer>
            </div>
 
+           {/* Profit and Loss */}
            <div className="glass-panel chart-container">
-             <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>Profit & Loss</h3>
+             <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>Profit & Loss Tracker</h3>
              <ResponsiveContainer width="100%" height="100%">
-               <AreaChart data={pnl}>
+               <AreaChart data={pnl} syncId="prosperitySync">
                  <defs>
                    <linearGradient id="colorPnl" x1="0" y1="0" x2="0" y2="1">
                      <stop offset="5%" stopColor="var(--emerald)" stopOpacity={0.3}/>
@@ -130,23 +201,27 @@ function App() {
                    </linearGradient>
                  </defs>
                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} />
+                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={['dataMin', 'dataMax']} />
                  <YAxis stroke="var(--text-muted)" fontSize={12} width={60} />
                  <RechartsTooltip contentStyle={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px' }} />
-                 <Area type="monotone" dataKey="pnl" stroke="var(--emerald)" fillOpacity={1} fill="url(#colorPnl)" name="PnL" />
+                 <Area type="stepAfter" dataKey="pnl" stroke="var(--emerald)" fillOpacity={1} fill="url(#colorPnl)" name="PnL" />
                </AreaChart>
              </ResponsiveContainer>
            </div>
            
-           <div className="glass-panel chart-container" style={{ gridColumn: '1 / -1' }}>
-             <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>Holdings / Positions Over Time</h3>
+           {/* Positions Map */}
+           <div className="glass-panel chart-container">
+             <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>Inventory Allocations</h3>
              <ResponsiveContainer width="100%" height="100%">
-               <ComposedChart data={positions}>
+               <ComposedChart data={positions} syncId="prosperitySync">
                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} />
+                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={['dataMin', 'dataMax']} />
                  <YAxis stroke="var(--text-muted)" fontSize={12} width={60} />
                  <RechartsTooltip contentStyle={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px' }} />
                  <Area type="stepAfter" dataKey="quantity" fill="var(--accent)" stroke="var(--accent)" fillOpacity={0.2} name="Position" />
+                 
+                 {/* Provide synchronous panning control securely */}
+                 <Brush dataKey="timestamp" height={40} stroke="var(--accent)" gap={50} />
                </ComposedChart>
              </ResponsiveContainer>
            </div>

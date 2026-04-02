@@ -152,14 +152,34 @@ h1, h2, h3 {
   gap: 1.5rem;
 }
 
-@media (min-width: 1024px) {
-  .chart-grid-2 {
-    grid-template-columns: 1fr 1fr;
-  }
+.tooltip-container {
+  background: var(--bg-card);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+  font-size: 0.85rem;
+  min-width: 200px;
+}
+
+.tooltip-header {
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.5rem;
+}
+
+.tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.25rem;
 }
 
 .chart-container {
-  height: 400px;
+  height: 480px;
   width: 100%;
 }
 
