@@ -1,7 +1,35 @@
 import { useState, useCallback } from 'react';
 import { UploadCloud, Activity, DollarSign, Box } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, Legend, ComposedChart, Scatter, ReferenceArea } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, Legend, ComposedChart, Brush, LineChart } from 'recharts';
 import { parseZipLog, ParsedData } from './utils/parser';
+
+const MakerDot = (props: any) => {
+  const { cx, cy, fill, payload, dataKey } = props;
+  if (!cx || !cy || payload[dataKey] == null) return null;
+  return (
+    <circle cx={cx} cy={cy} r={6} fill={fill} stroke="#ffffff" strokeWidth={1} style={{ filter: `drop-shadow(0px 0px 4px ${fill})` }} />
+  );
+};
+
+const TakerBuyDot = (props: any) => {
+  const { cx, cy, fill, payload, dataKey } = props;
+  if (!cx || !cy || payload[dataKey] == null) return null;
+  return (
+    <svg x={cx - 10} y={cy - 12} width={20} height={20} fill={fill} stroke="#ffffff" strokeWidth={0.5} style={{ filter: `drop-shadow(0px 0px 4px ${fill})` }} viewBox="0 0 24 24">
+      <path d="M12 2L2 22h20L12 2z" />
+    </svg>
+  );
+};
+
+const TakerSellDot = (props: any) => {
+  const { cx, cy, fill, payload, dataKey } = props;
+  if (!cx || !cy || payload[dataKey] == null) return null;
+  return (
+    <svg x={cx - 10} y={cy - 8} width={20} height={20} fill={fill} stroke="#ffffff" strokeWidth={0.5} style={{ filter: `drop-shadow(0px 0px 4px ${fill})` }} viewBox="0 0 24 24">
+      <path d="M12 22L22 2H2L12 22z" />
+    </svg>
+  );
+};
 
 const DepthTooltip = ({ active, payload }: any) => {
   if (active && payload && payload.length) {
@@ -26,11 +54,15 @@ const DepthTooltip = ({ active, payload }: any) => {
           {data.bid_price_3 != null && <div className="tooltip-row"><span>Bid 3: {data.bid_price_3}</span><span>Vol: {data.bid_volume_3}</span></div>}
         </div>
 
-        {(data.buy_exec_vol > 0 || data.sell_exec_vol > 0) && (
+        {(data.maker_buy_vol > 0 || data.taker_buy_vol > 0 || data.maker_sell_vol > 0 || data.taker_sell_vol > 0) && (
           <div style={{ marginTop: '12px', paddingTop: '8px', borderTop: '1px solid var(--border)' }}>
-             <div style={{ fontWeight: 'bold' }}>Trade Fills</div>
-             {data.buy_exec_vol > 0 && <div className="tooltip-row" style={{ color: 'var(--emerald)' }}><span>Bought:</span> <span>{data.buy_exec_vol} @ {data.buy_exec_price.toFixed(2)}</span></div>}
-             {data.sell_exec_vol > 0 && <div className="tooltip-row" style={{ color: 'var(--tomato)' }}><span>Sold:</span> <span>{data.sell_exec_vol} @ {data.sell_exec_price.toFixed(2)}</span></div>}
+             <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>Execution Logic</div>
+             
+             {data.taker_buy_vol > 0 && <div className="tooltip-row" style={{ color: '#00ffcc' }}><span>Taker Buy (▲):</span> <span>{data.taker_buy_vol} @ {data.taker_buy_price.toFixed(2)}</span></div>}
+             {data.maker_buy_vol > 0 && <div className="tooltip-row" style={{ color: 'var(--emerald)' }}><span>Maker Buy (●):</span> <span>{data.maker_buy_vol} @ {data.maker_buy_price.toFixed(2)}</span></div>}
+             
+             {data.taker_sell_vol > 0 && <div className="tooltip-row" style={{ color: '#ff00ff' }}><span>Taker Sell (▼):</span> <span>{data.taker_sell_vol} @ {data.taker_sell_price.toFixed(2)}</span></div>}
+             {data.maker_sell_vol > 0 && <div className="tooltip-row" style={{ color: 'var(--tomato)' }}><span>Maker Sell (●):</span> <span>{data.maker_sell_vol} @ {data.maker_sell_price.toFixed(2)}</span></div>}
           </div>
         )}
       </div>
@@ -44,12 +76,6 @@ function App() {
   const [error, setError] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [activeProduct, setActiveProduct] = useState<string>('');
-
-  // Zoom bindings
-  const [leftBounds, setLeftBounds] = useState<number | 'dataMin'>('dataMin');
-  const [rightBounds, setRightBounds] = useState<number | 'dataMax'>('dataMax');
-  const [refAreaLeft, setRefAreaLeft] = useState<number | null>(null);
-  const [refAreaRight, setRefAreaRight] = useState<number | null>(null);
 
   const onDrop = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     e.preventDefault();
@@ -70,33 +96,6 @@ function App() {
       setLoading(false);
     }
   }, []);
-
-  const zoom = () => {
-    let left = refAreaLeft;
-    let right = refAreaRight;
-
-    if (left === right || left == null || right == null) {
-      setRefAreaLeft(null);
-      setRefAreaRight(null);
-      return;
-    }
-
-    if (left > right) {
-      [left, right] = [right, left];
-    }
-
-    setRefAreaLeft(null);
-    setRefAreaRight(null);
-    setLeftBounds(left);
-    setRightBounds(right);
-  };
-
-  const zoomOut = () => {
-    setLeftBounds('dataMin');
-    setRightBounds('dataMax');
-    setRefAreaLeft(null);
-    setRefAreaRight(null);
-  };
 
   if (!data) {
     return (
@@ -127,25 +126,46 @@ function App() {
 
   const activities = baseActivities.map(act => {
     const tradesAtTime = activeTrades.filter(t => t.timestamp === act.timestamp);
-    let buyVol = 0, buyCost = 0, sellVol = 0, sellCost = 0;
+    let makerBuyVol = 0, makerBuyCost = 0;
+    let takerBuyVol = 0, takerBuyCost = 0;
+    let makerSellVol = 0, makerSellCost = 0;
+    let takerSellVol = 0, takerSellCost = 0;
     
+    // Natively track Ask 1 and Bid 1 for thresholding, assuming standard values
+    const ask1 = act.ask_price_1 ?? Infinity;
+    const bid1 = act.bid_price_1 ?? 0;
+
     for (const t of tradesAtTime) {
       if (t.buyer === "SUBMISSION") {
-          buyVol += t.quantity;
-          buyCost += t.quantity * t.price;
+          if (t.price >= ask1) {
+             takerBuyVol += t.quantity;
+             takerBuyCost += t.quantity * t.price;
+          } else {
+             makerBuyVol += t.quantity;
+             makerBuyCost += t.quantity * t.price;
+          }
       }
       if (t.seller === "SUBMISSION") {
-          sellVol += t.quantity;
-          sellCost += t.quantity * t.price;
+          if (t.price <= bid1) {
+             takerSellVol += t.quantity;
+             takerSellCost += t.quantity * t.price;
+          } else {
+             makerSellVol += t.quantity;
+             makerSellCost += t.quantity * t.price;
+          }
       }
     }
     
     return {
       ...act,
-      buy_exec_vol: buyVol,
-      buy_exec_price: buyVol > 0 ? buyCost / buyVol : null,
-      sell_exec_vol: sellVol,
-      sell_exec_price: sellVol > 0 ? sellCost / sellVol : null,
+      maker_buy_vol: makerBuyVol,
+      maker_buy_price: makerBuyVol > 0 ? makerBuyCost / makerBuyVol : null,
+      taker_buy_vol: takerBuyVol,
+      taker_buy_price: takerBuyVol > 0 ? takerBuyCost / takerBuyVol : null,
+      maker_sell_vol: makerSellVol,
+      maker_sell_price: makerSellVol > 0 ? makerSellCost / makerSellVol : null,
+      taker_sell_vol: takerSellVol,
+      taker_sell_price: takerSellVol > 0 ? takerSellCost / takerSellVol : null,
     };
   });
 
@@ -157,7 +177,7 @@ function App() {
     <div className="app-container">
       <div className="header" style={{ textAlign: 'left', marginBottom: '2rem' }}>
         <h1 style={{ fontSize: '2rem' }}>Prosperity Dashboard</h1>
-        <p style={{ color: 'var(--text-muted)' }}>Drag to highlight and zoom into specific areas. Double click on any chart to reset zoom.</p>
+        <p style={{ color: 'var(--text-muted)' }}>Use the Global Timeline bar below to slide, narrow, and select exactly the time period you wish to see.</p>
       </div>
 
       <div className="dashboard">
@@ -167,17 +187,13 @@ function App() {
                <button 
                  key={p} 
                  className={`btn ${activeProduct === p ? 'active' : ''}`}
-                 onClick={() => {
-                   setActiveProduct(p);
-                   zoomOut();
-                 }}
+                 onClick={() => setActiveProduct(p)}
                >
                  {p}
                </button>
              ))}
            </div>
-           <button className="btn" onClick={zoomOut} style={{ marginLeft: "auto", marginRight: "1rem" }}>Reset Zoom</button>
-           <button className="btn" onClick={() => setData(null)}>Upload New Run</button>
+           <button className="btn" onClick={() => setData(null)} style={{ marginLeft: "auto" }}>Upload New Run</button>
         </div>
 
         <div className="stats-grid">
@@ -198,39 +214,46 @@ function App() {
         </div>
 
         <div className="chart-grid">
+           {/* Global Timeline Control Bar */}
+           <div className="glass-panel" style={{ height: '100px', padding: '1rem', display: 'flex', flexDirection: 'column' }}>
+             <h3 style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>Global Timeline Selector</h3>
+             <ResponsiveContainer width="100%" height="100%">
+               <LineChart data={activities} syncId="prosperitySync">
+                 <XAxis dataKey="timestamp" hide />
+                 <YAxis domain={['auto', 'auto']} hide />
+                 <Line type="monotone" dataKey="mid_price" stroke="var(--accent)" strokeWidth={1} dot={false} isAnimationActive={false} />
+                 {/* This Brush controls the zoom for all linked charts! */}
+                 <Brush dataKey="timestamp" height={30} stroke="var(--accent)" fill="var(--bg-card)" tickFormatter={() => ''} />
+               </LineChart>
+             </ResponsiveContainer>
+           </div>
+
            <div className="glass-panel chart-container">
              <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>Market Depth & Executions</h3>
              <ResponsiveContainer width="100%" height="100%">
-               <ComposedChart 
-                  data={activities} 
-                  syncId="prosperitySync"
-                  onMouseDown={(e: any) => e && setRefAreaLeft(e.activeLabel)}
-                  onMouseMove={(e: any) => refAreaLeft && e && setRefAreaRight(e.activeLabel)}
-                  onMouseUp={zoom}
-                  onDoubleClick={zoomOut}
-               >
+               <ComposedChart data={activities} syncId="prosperitySync">
                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={[leftBounds, rightBounds]} />
+                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={['dataMin', 'dataMax']} />
                  <YAxis domain={['auto', 'auto']} stroke="var(--text-muted)" fontSize={12} width={60} />
                  <RechartsTooltip content={<DepthTooltip />} />
                  <Legend />
                  
-                 <Line type="stepAfter" dataKey="ask_price_3" stroke="rgba(239, 68, 68, 0.4)" dot={false} strokeWidth={1} name="Ask 3" />
-                 <Line type="stepAfter" dataKey="ask_price_2" stroke="rgba(239, 68, 68, 0.7)" dot={false} strokeWidth={1} name="Ask 2" />
-                 <Line type="stepAfter" dataKey="ask_price_1" stroke="var(--tomato)" dot={false} strokeWidth={2} name="Ask 1" />
+                 <Line type="stepAfter" dataKey="ask_price_3" stroke="rgba(239, 68, 68, 0.4)" dot={false} strokeWidth={1} name="Ask 3" isAnimationActive={false} />
+                 <Line type="stepAfter" dataKey="ask_price_2" stroke="rgba(239, 68, 68, 0.7)" dot={false} strokeWidth={1} name="Ask 2" isAnimationActive={false} />
+                 <Line type="stepAfter" dataKey="ask_price_1" stroke="var(--tomato)" dot={false} strokeWidth={2} name="Ask 1" isAnimationActive={false} />
                  
-                 <Line type="stepAfter" dataKey="mid_price" stroke="var(--accent)" dot={false} strokeWidth={2} name="Mid Price" />
+                 <Line type="stepAfter" dataKey="mid_price" stroke="var(--accent)" dot={false} strokeWidth={2} name="Mid Price" isAnimationActive={false} />
                  
-                 <Line type="stepAfter" dataKey="bid_price_1" stroke="var(--emerald)" dot={false} strokeWidth={2} name="Bid 1" />
-                 <Line type="stepAfter" dataKey="bid_price_2" stroke="rgba(16, 185, 129, 0.7)" dot={false} strokeWidth={1} name="Bid 2" />
-                 <Line type="stepAfter" dataKey="bid_price_3" stroke="rgba(16, 185, 129, 0.4)" dot={false} strokeWidth={1} name="Bid 3" />
+                 <Line type="stepAfter" dataKey="bid_price_1" stroke="var(--emerald)" dot={false} strokeWidth={2} name="Bid 1" isAnimationActive={false} />
+                 <Line type="stepAfter" dataKey="bid_price_2" stroke="rgba(16, 185, 129, 0.7)" dot={false} strokeWidth={1} name="Bid 2" isAnimationActive={false} />
+                 <Line type="stepAfter" dataKey="bid_price_3" stroke="rgba(16, 185, 129, 0.4)" dot={false} strokeWidth={1} name="Bid 3" isAnimationActive={false} />
 
-                 <Scatter dataKey="buy_exec_price" fill="var(--emerald)" shape="star" name="Buy Fill" />
-                 <Scatter dataKey="sell_exec_price" fill="var(--tomato)" shape="star" name="Sell Fill" />
-
-                 {refAreaLeft != null && refAreaRight != null ? (
-                   <ReferenceArea x1={refAreaLeft} x2={refAreaRight} strokeOpacity={0.3} fill="var(--accent)" fillOpacity={0.3} />
-                 ) : null}
+                 {/* Custom shapes for Taker / Maker markers seamlessly integrated into lines */}
+                 <Line type="monotone" dataKey="taker_buy_price" stroke="none" dot={<TakerBuyDot fill="#00ffcc" />} name="Taker Buy (▲)" isAnimationActive={false} />
+                 <Line type="monotone" dataKey="maker_buy_price" stroke="none" dot={<MakerDot fill="var(--emerald)" />} name="Maker Buy (●)" isAnimationActive={false} />
+                 
+                 <Line type="monotone" dataKey="taker_sell_price" stroke="none" dot={<TakerSellDot fill="#ff00ff" />} name="Taker Sell (▼)" isAnimationActive={false} />
+                 <Line type="monotone" dataKey="maker_sell_price" stroke="none" dot={<MakerDot fill="var(--tomato)" />} name="Maker Sell (●)" isAnimationActive={false} />
                </ComposedChart>
              </ResponsiveContainer>
            </div>
@@ -238,14 +261,7 @@ function App() {
            <div className="glass-panel chart-container">
              <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>Profit & Loss Tracker</h3>
              <ResponsiveContainer width="100%" height="100%">
-               <AreaChart 
-                  data={pnl} 
-                  syncId="prosperitySync"
-                  onMouseDown={(e: any) => e && setRefAreaLeft(e.activeLabel)}
-                  onMouseMove={(e: any) => refAreaLeft && e && setRefAreaRight(e.activeLabel)}
-                  onMouseUp={zoom}
-                  onDoubleClick={zoomOut}
-               >
+               <AreaChart data={pnl} syncId="prosperitySync">
                  <defs>
                    <linearGradient id="colorPnl" x1="0" y1="0" x2="0" y2="1">
                      <stop offset="5%" stopColor="var(--emerald)" stopOpacity={0.3}/>
@@ -253,14 +269,10 @@ function App() {
                    </linearGradient>
                  </defs>
                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={[leftBounds, rightBounds]} />
+                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={['dataMin', 'dataMax']} />
                  <YAxis stroke="var(--text-muted)" fontSize={12} width={60} />
                  <RechartsTooltip contentStyle={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px' }} />
-                 <Area type="stepAfter" dataKey="pnl" stroke="var(--emerald)" fillOpacity={1} fill="url(#colorPnl)" name="PnL" />
-                 
-                 {refAreaLeft != null && refAreaRight != null ? (
-                   <ReferenceArea x1={refAreaLeft} x2={refAreaRight} strokeOpacity={0.3} fill="var(--accent)" fillOpacity={0.3} />
-                 ) : null}
+                 <Area type="stepAfter" dataKey="pnl" stroke="var(--emerald)" fillOpacity={1} fill="url(#colorPnl)" name="PnL" isAnimationActive={false} />
                </AreaChart>
              </ResponsiveContainer>
            </div>
@@ -268,23 +280,12 @@ function App() {
            <div className="glass-panel chart-container">
              <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>Inventory Allocations</h3>
              <ResponsiveContainer width="100%" height="100%">
-               <ComposedChart 
-                  data={positions} 
-                  syncId="prosperitySync"
-                  onMouseDown={(e: any) => e && setRefAreaLeft(e.activeLabel)}
-                  onMouseMove={(e: any) => refAreaLeft && e && setRefAreaRight(e.activeLabel)}
-                  onMouseUp={zoom}
-                  onDoubleClick={zoomOut}
-               >
+               <ComposedChart data={positions} syncId="prosperitySync">
                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={[leftBounds, rightBounds]} />
+                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={['dataMin', 'dataMax']} />
                  <YAxis stroke="var(--text-muted)" fontSize={12} width={60} />
                  <RechartsTooltip contentStyle={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px' }} />
-                 <Area type="stepAfter" dataKey="quantity" fill="var(--accent)" stroke="var(--accent)" fillOpacity={0.2} name="Position" />
-                 
-                 {refAreaLeft != null && refAreaRight != null ? (
-                   <ReferenceArea x1={refAreaLeft} x2={refAreaRight} strokeOpacity={0.3} fill="var(--accent)" fillOpacity={0.3} />
-                 ) : null}
+                 <Area type="stepAfter" dataKey="quantity" fill="var(--accent)" stroke="var(--accent)" fillOpacity={0.2} name="Position" isAnimationActive={false} />
                </ComposedChart>
              </ResponsiveContainer>
            </div>
