@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { UploadCloud, Activity, DollarSign, Box } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, Legend, ComposedChart, Scatter, Brush } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Line, Legend, ComposedChart, Scatter, ReferenceArea } from 'recharts';
 import { parseZipLog, ParsedData } from './utils/parser';
 
 const DepthTooltip = ({ active, payload }: any) => {
@@ -45,6 +45,12 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [activeProduct, setActiveProduct] = useState<string>('');
 
+  // Zoom bindings
+  const [leftBounds, setLeftBounds] = useState<number | 'dataMin'>('dataMin');
+  const [rightBounds, setRightBounds] = useState<number | 'dataMax'>('dataMax');
+  const [refAreaLeft, setRefAreaLeft] = useState<number | null>(null);
+  const [refAreaRight, setRefAreaRight] = useState<number | null>(null);
+
   const onDrop = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     e.preventDefault();
     const file = e.target.files?.[0];
@@ -64,6 +70,33 @@ function App() {
       setLoading(false);
     }
   }, []);
+
+  const zoom = () => {
+    let left = refAreaLeft;
+    let right = refAreaRight;
+
+    if (left === right || left == null || right == null) {
+      setRefAreaLeft(null);
+      setRefAreaRight(null);
+      return;
+    }
+
+    if (left > right) {
+      [left, right] = [right, left];
+    }
+
+    setRefAreaLeft(null);
+    setRefAreaRight(null);
+    setLeftBounds(left);
+    setRightBounds(right);
+  };
+
+  const zoomOut = () => {
+    setLeftBounds('dataMin');
+    setRightBounds('dataMax');
+    setRefAreaLeft(null);
+    setRefAreaRight(null);
+  };
 
   if (!data) {
     return (
@@ -92,7 +125,6 @@ function App() {
   const pnl = data.pnl[activeProduct] || [];
   const activeTrades = data.trades[activeProduct] || [];
 
-  // Merge Trades locally for the dashboard rendering
   const activities = baseActivities.map(act => {
     const tradesAtTime = activeTrades.filter(t => t.timestamp === act.timestamp);
     let buyVol = 0, buyCost = 0, sellVol = 0, sellCost = 0;
@@ -117,7 +149,6 @@ function App() {
     };
   });
 
-  // Metrics
   const lastActivity = activities[activities.length - 1];
   const lastState = lastActivity ? { mid: lastActivity.mid_price, pnl: lastActivity.profit_and_loss } : { mid: 0, pnl: 0 };
   const lastPos = positions[positions.length - 1]?.quantity || 0;
@@ -126,6 +157,7 @@ function App() {
     <div className="app-container">
       <div className="header" style={{ textAlign: 'left', marginBottom: '2rem' }}>
         <h1 style={{ fontSize: '2rem' }}>Prosperity Dashboard</h1>
+        <p style={{ color: 'var(--text-muted)' }}>Drag to highlight and zoom into specific areas. Double click on any chart to reset zoom.</p>
       </div>
 
       <div className="dashboard">
@@ -135,13 +167,17 @@ function App() {
                <button 
                  key={p} 
                  className={`btn ${activeProduct === p ? 'active' : ''}`}
-                 onClick={() => setActiveProduct(p)}
+                 onClick={() => {
+                   setActiveProduct(p);
+                   zoomOut();
+                 }}
                >
                  {p}
                </button>
              ))}
            </div>
-           <button className="btn" onClick={() => setData(null)} style={{ marginLeft: "auto" }}>Upload New Run</button>
+           <button className="btn" onClick={zoomOut} style={{ marginLeft: "auto", marginRight: "1rem" }}>Reset Zoom</button>
+           <button className="btn" onClick={() => setData(null)}>Upload New Run</button>
         </div>
 
         <div className="stats-grid">
@@ -162,13 +198,19 @@ function App() {
         </div>
 
         <div className="chart-grid">
-           {/* Order Book with Trades */}
            <div className="glass-panel chart-container">
              <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>Market Depth & Executions</h3>
              <ResponsiveContainer width="100%" height="100%">
-               <ComposedChart data={activities} syncId="prosperitySync">
+               <ComposedChart 
+                  data={activities} 
+                  syncId="prosperitySync"
+                  onMouseDown={(e: any) => e && setRefAreaLeft(e.activeLabel)}
+                  onMouseMove={(e: any) => refAreaLeft && e && setRefAreaRight(e.activeLabel)}
+                  onMouseUp={zoom}
+                  onDoubleClick={zoomOut}
+               >
                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={['dataMin', 'dataMax']} />
+                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={[leftBounds, rightBounds]} />
                  <YAxis domain={['auto', 'auto']} stroke="var(--text-muted)" fontSize={12} width={60} />
                  <RechartsTooltip content={<DepthTooltip />} />
                  <Legend />
@@ -185,15 +227,25 @@ function App() {
 
                  <Scatter dataKey="buy_exec_price" fill="var(--emerald)" shape="star" name="Buy Fill" />
                  <Scatter dataKey="sell_exec_price" fill="var(--tomato)" shape="star" name="Sell Fill" />
+
+                 {refAreaLeft != null && refAreaRight != null ? (
+                   <ReferenceArea x1={refAreaLeft} x2={refAreaRight} strokeOpacity={0.3} fill="var(--accent)" fillOpacity={0.3} />
+                 ) : null}
                </ComposedChart>
              </ResponsiveContainer>
            </div>
 
-           {/* Profit and Loss */}
            <div className="glass-panel chart-container">
              <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>Profit & Loss Tracker</h3>
              <ResponsiveContainer width="100%" height="100%">
-               <AreaChart data={pnl} syncId="prosperitySync">
+               <AreaChart 
+                  data={pnl} 
+                  syncId="prosperitySync"
+                  onMouseDown={(e: any) => e && setRefAreaLeft(e.activeLabel)}
+                  onMouseMove={(e: any) => refAreaLeft && e && setRefAreaRight(e.activeLabel)}
+                  onMouseUp={zoom}
+                  onDoubleClick={zoomOut}
+               >
                  <defs>
                    <linearGradient id="colorPnl" x1="0" y1="0" x2="0" y2="1">
                      <stop offset="5%" stopColor="var(--emerald)" stopOpacity={0.3}/>
@@ -201,27 +253,38 @@ function App() {
                    </linearGradient>
                  </defs>
                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={['dataMin', 'dataMax']} />
+                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={[leftBounds, rightBounds]} />
                  <YAxis stroke="var(--text-muted)" fontSize={12} width={60} />
                  <RechartsTooltip contentStyle={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px' }} />
                  <Area type="stepAfter" dataKey="pnl" stroke="var(--emerald)" fillOpacity={1} fill="url(#colorPnl)" name="PnL" />
+                 
+                 {refAreaLeft != null && refAreaRight != null ? (
+                   <ReferenceArea x1={refAreaLeft} x2={refAreaRight} strokeOpacity={0.3} fill="var(--accent)" fillOpacity={0.3} />
+                 ) : null}
                </AreaChart>
              </ResponsiveContainer>
            </div>
            
-           {/* Positions Map */}
            <div className="glass-panel chart-container">
              <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>Inventory Allocations</h3>
              <ResponsiveContainer width="100%" height="100%">
-               <ComposedChart data={positions} syncId="prosperitySync">
+               <ComposedChart 
+                  data={positions} 
+                  syncId="prosperitySync"
+                  onMouseDown={(e: any) => e && setRefAreaLeft(e.activeLabel)}
+                  onMouseMove={(e: any) => refAreaLeft && e && setRefAreaRight(e.activeLabel)}
+                  onMouseUp={zoom}
+                  onDoubleClick={zoomOut}
+               >
                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={['dataMin', 'dataMax']} />
+                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={[leftBounds, rightBounds]} />
                  <YAxis stroke="var(--text-muted)" fontSize={12} width={60} />
                  <RechartsTooltip contentStyle={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px' }} />
                  <Area type="stepAfter" dataKey="quantity" fill="var(--accent)" stroke="var(--accent)" fillOpacity={0.2} name="Position" />
                  
-                 {/* Provide synchronous panning control securely */}
-                 <Brush dataKey="timestamp" height={40} stroke="var(--accent)" gap={50} />
+                 {refAreaLeft != null && refAreaRight != null ? (
+                   <ReferenceArea x1={refAreaLeft} x2={refAreaRight} strokeOpacity={0.3} fill="var(--accent)" fillOpacity={0.3} />
+                 ) : null}
                </ComposedChart>
              </ResponsiveContainer>
            </div>
