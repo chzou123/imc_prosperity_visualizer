@@ -3,14 +3,14 @@ import { UploadCloud, Activity, DollarSign, Box } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid,
   Tooltip as RechartsTooltip, ResponsiveContainer,
-  Line, Legend, ComposedChart, Brush, LineChart, BarChart, Bar,
+  Line, Legend, ComposedChart, Brush, LineChart,
 } from 'recharts';
 import { parseZipLog, ParsedData } from './utils/parser';
 import {
   computeWallMid, classifyTraders, computeSharpe,
   computeRollingVolatility, computeTotalVolatility,
-  computeMaxDrawdown, computeWinRate, buildPnlHistogram,
-  TraderClass, TraderStats,
+  computeMaxDrawdown, computeWinRate,
+  TraderStats,
 } from './utils/analytics';
 import { BotAnalysis } from './components/BotAnalysis';
 
@@ -122,11 +122,6 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [activeProduct, setActiveProduct] = useState<string>('');
 
-  // New feature state
-  const [normalizeMode, setNormalizeMode] = useState<'none' | 'wallmid' | 'midprice'>('none');
-  const [activeClasses, setActiveClasses] = useState<Set<TraderClass>>(new Set(['F', 'M', 'S', 'B', 'I']));
-  const [qtyMax, setQtyMax] = useState<number>(Infinity);
-
   const onDrop = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     e.preventDefault();
     const file = e.target.files?.[0];
@@ -164,18 +159,11 @@ function App() {
     );
   }
 
-  // ── Per-product data ────────────────────────────────────────────────────────
   return <Dashboard
     data={data}
     activeProduct={activeProduct}
     setActiveProduct={setActiveProduct}
     setData={setData}
-    normalizeMode={normalizeMode}
-    setNormalizeMode={setNormalizeMode}
-    activeClasses={activeClasses}
-    setActiveClasses={setActiveClasses}
-    qtyMax={qtyMax}
-    setQtyMax={setQtyMax}
   />;
 }
 
@@ -186,19 +174,9 @@ interface DashboardProps {
   activeProduct: string;
   setActiveProduct: (p: string) => void;
   setData: (d: ParsedData | null) => void;
-  normalizeMode: 'none' | 'wallmid' | 'midprice';
-  setNormalizeMode: (m: 'none' | 'wallmid' | 'midprice') => void;
-  activeClasses: Set<TraderClass>;
-  setActiveClasses: (s: Set<TraderClass>) => void;
-  qtyMax: number;
-  setQtyMax: (n: number) => void;
 }
 
-function Dashboard({
-  data, activeProduct, setActiveProduct, setData,
-  normalizeMode, setNormalizeMode, activeClasses, setActiveClasses,
-  qtyMax, setQtyMax,
-}: DashboardProps) {
+function Dashboard({ data, activeProduct, setActiveProduct, setData }: DashboardProps) {
   const baseActivities = data.activities[activeProduct] || [];
   const positions = data.positions[activeProduct] || [];
   const pnl = data.pnl[activeProduct] || [];
@@ -210,18 +188,16 @@ function Dashboard({
   console.log('[Prosperity] activeTrades.length:', activeTrades.length);
   if (activeTrades.length > 0) console.log('[Prosperity] sample trade:', activeTrades[0]);
 
-  // Trader classification
+  // Depth chart line visibility toggles
+  const [showBids, setShowBids] = useState(true);
+  const [showAsks, setShowAsks] = useState(true);
+  const [showMid, setShowMid] = useState(true);
+
+  // Trader classification (for BotAnalysis)
   const traderStatsMap = useMemo<Map<string, TraderStats>>(
     () => classifyTraders(activeTrades, baseActivities),
     [activeTrades, baseActivities]
   );
-
-  // Max qty for slider
-  const dataMaxQty = useMemo(
-    () => activeTrades.length ? Math.max(...activeTrades.map(t => t.quantity)) : 100,
-    [activeTrades]
-  );
-  const effectiveQtyMax = Math.min(qtyMax, dataMaxQty);
 
   // Metrics
   const metrics = useMemo(() => {
@@ -232,7 +208,6 @@ function Dashboard({
       maxDrawdown: computeMaxDrawdown(pnlValues),
       winRate: computeWinRate(pnlValues),
       rollingVol: computeRollingVolatility(pnlValues, 20),
-      histogram: buildPnlHistogram(pnlValues),
     };
   }, [pnl]);
 
@@ -243,7 +218,6 @@ function Dashboard({
 
   // Y-axis domain: true observed price range (excludes blank/zero rows) + small padding
   const priceDomain = useMemo((): [number, number] | ['auto', 'auto'] => {
-    if (normalizeMode !== 'none') return ['auto', 'auto'];
     let min = Infinity, max = -Infinity;
     for (const row of baseActivities) {
       for (const p of [
@@ -259,9 +233,9 @@ function Dashboard({
     if (!isFinite(min)) return ['auto', 'auto'];
     const pad = Math.max((max - min) * 0.1, 2);
     return [Math.floor(min - pad), Math.ceil(max + pad)];
-  }, [baseActivities, normalizeMode]);
+  }, [baseActivities]);
 
-  // Enriched activities with Wall Mid, market trades, normalization
+  // Enriched activities: maker/taker split + Wall Mid + market trades
   const activities = useMemo(() => baseActivities.map((act, i) => {
     const tradesAtTime = activeTrades.filter(t => t.timestamp === act.timestamp);
 
@@ -293,26 +267,14 @@ function Dashboard({
     // Wall Mid
     const { wall_mid } = computeWallMid(act);
 
-    // Market trades (non-SUBMISSION both sides), filtered by class + qty
-    const marketTrades = tradesAtTime.filter(t => {
-      if (t.buyer === 'SUBMISSION' || t.seller === 'SUBMISSION') return false;
-      const stats = traderStatsMap.get(t.buyer) ?? traderStatsMap.get(t.seller);
-      const cls: TraderClass = stats?.traderClass ?? 'S';
-      return activeClasses.has(cls) && t.quantity <= effectiveQtyMax;
-    });
+    // Market trades: all non-SUBMISSION crosses (always shown, vwap per timestep)
+    const marketTrades = tradesAtTime.filter(
+      t => t.buyer !== 'SUBMISSION' && t.seller !== 'SUBMISSION'
+    );
     const market_trade_price = marketTrades.length > 0
       ? marketTrades.reduce((s, t) => s + t.price * t.quantity, 0) /
         marketTrades.reduce((s, t) => s + t.quantity, 0)
       : null;
-
-    // Normalization
-    const ref = normalizeMode === 'wallmid' ? (wall_mid ?? act.mid_price ?? 0)
-              : normalizeMode === 'midprice' ? (act.mid_price ?? 0)
-              : 0;
-    const norm = (v: number | null | undefined): number | null => v != null ? v - ref : null;
-
-    // Rolling vol for chart
-    const rollingVolAtPoint = metrics.rollingVol[i] ?? null;
 
     return {
       ...act,
@@ -326,40 +288,15 @@ function Dashboard({
       taker_sell_price: takerSellPrice,
       wall_mid,
       market_trade_price,
-      rolling_vol: rollingVolAtPoint,
-      // Normalized variants
-      n_ask_price_3: norm(act.ask_price_3),
-      n_ask_price_2: norm(act.ask_price_2),
-      n_ask_price_1: norm(act.ask_price_1),
-      n_mid_price: norm(act.mid_price),
-      n_bid_price_1: norm(act.bid_price_1),
-      n_bid_price_2: norm(act.bid_price_2),
-      n_bid_price_3: norm(act.bid_price_3),
-      n_wall_mid: norm(wall_mid),
-      n_maker_buy_price: norm(makerBuyPrice),
-      n_taker_buy_price: norm(takerBuyPrice),
-      n_maker_sell_price: norm(makerSellPrice),
-      n_taker_sell_price: norm(takerSellPrice),
-      n_market_trade_price: norm(market_trade_price),
+      rolling_vol: metrics.rollingVol[i] ?? null,
     };
-  }), [baseActivities, activeTrades, traderStatsMap, normalizeMode, activeClasses, effectiveQtyMax, metrics.rollingVol]);
-
-  // Helper: pick normalized or raw dataKey
-  const pk = (key: string) => normalizeMode !== 'none' ? `n_${key}` : key;
+  }), [baseActivities, activeTrades, metrics.rollingVol]);
 
   const lastActivity = activities[activities.length - 1];
   const lastState = lastActivity
     ? { mid: lastActivity.mid_price, pnl: lastActivity.profit_and_loss }
     : { mid: 0, pnl: 0 };
   const lastPos = positions[positions.length - 1]?.quantity || 0;
-
-  const toggleClass = (cls: TraderClass) => {
-    const next = new Set(activeClasses);
-    next.has(cls) ? next.delete(cls) : next.add(cls);
-    setActiveClasses(next);
-  };
-
-  const CLASS_LABELS: Record<TraderClass, string> = { F: 'F (Us)', M: 'M (MM)', S: 'S (Small)', B: 'B (Big)', I: 'I (Informed)' };
 
   return (
     <div className="app-container">
@@ -378,44 +315,24 @@ function Dashboard({
             ))}
           </div>
 
-          {/* Normalize dropdown */}
-          <select
-            value={normalizeMode}
-            onChange={e => setNormalizeMode(e.target.value as 'none' | 'wallmid' | 'midprice')}
-            className="btn"
-            style={{ background: 'var(--bg-card)', color: normalizeMode !== 'none' ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', borderColor: normalizeMode !== 'none' ? 'var(--accent)' : undefined }}
-          >
-            <option value="none">No Normalization</option>
-            <option value="wallmid">Normalize: Wall Mid</option>
-            <option value="midprice">Normalize: Mid Price</option>
-          </select>
-
-          {/* Trader class filter */}
+          {/* Depth chart visibility toggles */}
           <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
             <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>Show:</span>
-            {(['F', 'M', 'S', 'B', 'I'] as TraderClass[]).map(cls => (
-              <button
-                key={cls}
-                className={`btn ${activeClasses.has(cls) ? 'active' : ''}`}
-                style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
-                onClick={() => toggleClass(cls)}
-                title={CLASS_LABELS[cls]}
-              >
-                {cls}
-              </button>
-            ))}
-          </div>
-
-          {/* Quantity filter slider */}
-          <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', whiteSpace: 'nowrap' }}>Max Qty:</span>
-            <input
-              type="range" min={1} max={dataMaxQty} step={1}
-              value={effectiveQtyMax}
-              onChange={e => setQtyMax(Number(e.target.value))}
-              style={{ width: '90px' }}
-            />
-            <span style={{ color: 'var(--text-muted)', fontSize: '0.8rem', minWidth: '2rem' }}>{effectiveQtyMax}</span>
+            <button
+              className={`btn ${showBids ? 'active' : ''}`}
+              style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem', borderColor: showBids ? 'var(--emerald)' : undefined, background: showBids ? 'var(--emerald)' : undefined }}
+              onClick={() => setShowBids(v => !v)}
+            >Bids</button>
+            <button
+              className={`btn ${showAsks ? 'active' : ''}`}
+              style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem', borderColor: showAsks ? 'var(--tomato)' : undefined, background: showAsks ? 'var(--tomato)' : undefined }}
+              onClick={() => setShowAsks(v => !v)}
+            >Asks</button>
+            <button
+              className={`btn ${showMid ? 'active' : ''}`}
+              style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
+              onClick={() => setShowMid(v => !v)}
+            >Mid</button>
           </div>
 
           <button className="btn" onClick={() => setData(null)} style={{ marginLeft: 'auto' }}>Upload New Run</button>
@@ -475,12 +392,7 @@ function Dashboard({
 
           {/* Market Depth & Executions */}
           <div className="glass-panel chart-container">
-            <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>
-              Market Depth & Executions
-              {normalizeMode !== 'none' && <span style={{ color: 'var(--accent)', fontSize: '0.8rem', marginLeft: '0.75rem' }}>
-                (Normalized by {normalizeMode === 'wallmid' ? 'Wall Mid' : 'Mid Price'})
-              </span>}
-            </h3>
+            <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>Market Depth & Executions</h3>
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={activities} syncId="prosperitySync">
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
@@ -489,35 +401,41 @@ function Dashboard({
                 <RechartsTooltip content={<DepthTooltip />} />
                 <Legend />
 
-                {/* Bid/Ask levels */}
-                <Line type="stepAfter" dataKey={pk('ask_price_3')} stroke="rgba(239,68,68,0.4)" dot={false} strokeWidth={1} name="Ask 3" isAnimationActive={false} />
-                <Line type="stepAfter" dataKey={pk('ask_price_2')} stroke="rgba(239,68,68,0.7)" dot={false} strokeWidth={1} name="Ask 2" isAnimationActive={false} />
-                <Line type="stepAfter" dataKey={pk('ask_price_1')} stroke="var(--tomato)" dot={false} strokeWidth={2} name="Ask 1" isAnimationActive={false} />
+                {/* Ask levels */}
+                {showAsks && <>
+                  <Line type="stepAfter" dataKey="ask_price_3" stroke="rgba(239,68,68,0.4)" dot={false} strokeWidth={1} name="Ask 3" isAnimationActive={false} />
+                  <Line type="stepAfter" dataKey="ask_price_2" stroke="rgba(239,68,68,0.7)" dot={false} strokeWidth={1} name="Ask 2" isAnimationActive={false} />
+                  <Line type="stepAfter" dataKey="ask_price_1" stroke="var(--tomato)" dot={false} strokeWidth={2} name="Ask 1" isAnimationActive={false} />
+                </>}
 
-                <Line type="stepAfter" dataKey={pk('mid_price')} stroke="var(--accent)" dot={false} strokeWidth={2} name="Mid Price" isAnimationActive={false} />
+                {/* Mid price */}
+                {showMid && (
+                  <Line type="stepAfter" dataKey="mid_price" stroke="var(--accent)" dot={false} strokeWidth={2} name="Mid Price" isAnimationActive={false} />
+                )}
 
-                {/* Wall Mid — always shown in raw coordinates since it's a price itself */}
-                <Line type="stepAfter" dataKey={pk('wall_mid')} stroke="#f97316" dot={false} strokeWidth={1.5} strokeDasharray="5 3" name="Wall Mid" isAnimationActive={false} />
+                {/* Wall Mid (always shown) */}
+                <Line type="stepAfter" dataKey="wall_mid" stroke="#f97316" dot={false} strokeWidth={1.5} strokeDasharray="5 3" name="Wall Mid" isAnimationActive={false} />
 
-                <Line type="stepAfter" dataKey={pk('bid_price_1')} stroke="var(--emerald)" dot={false} strokeWidth={2} name="Bid 1" isAnimationActive={false} />
-                <Line type="stepAfter" dataKey={pk('bid_price_2')} stroke="rgba(16,185,129,0.7)" dot={false} strokeWidth={1} name="Bid 2" isAnimationActive={false} />
-                <Line type="stepAfter" dataKey={pk('bid_price_3')} stroke="rgba(16,185,129,0.4)" dot={false} strokeWidth={1} name="Bid 3" isAnimationActive={false} />
+                {/* Bid levels */}
+                {showBids && <>
+                  <Line type="stepAfter" dataKey="bid_price_1" stroke="var(--emerald)" dot={false} strokeWidth={2} name="Bid 1" isAnimationActive={false} />
+                  <Line type="stepAfter" dataKey="bid_price_2" stroke="rgba(16,185,129,0.7)" dot={false} strokeWidth={1} name="Bid 2" isAnimationActive={false} />
+                  <Line type="stepAfter" dataKey="bid_price_3" stroke="rgba(16,185,129,0.4)" dot={false} strokeWidth={1} name="Bid 3" isAnimationActive={false} />
+                </>}
 
-                {/* Market trades (non-SUBMISSION) */}
-                <Line type="monotone" dataKey={pk('market_trade_price')} stroke="none"
+                {/* Market trades (non-SUBMISSION, always shown) */}
+                <Line type="monotone" dataKey="market_trade_price" stroke="none"
                   dot={<MarketTradeDot />} name="Market Trade (✕)" isAnimationActive={false} />
 
-                {/* SUBMISSION trades — conditionally shown */}
-                {activeClasses.has('F') && <>
-                  <Line type="monotone" dataKey={pk('maker_buy_price')} stroke="none"
-                    dot={<MakerBuyDot />} name="Maker Buy (■)" isAnimationActive={false} />
-                  <Line type="monotone" dataKey={pk('taker_buy_price')} stroke="none"
-                    dot={<TakerBuyDot />} name="Taker Buy (▲)" isAnimationActive={false} />
-                  <Line type="monotone" dataKey={pk('maker_sell_price')} stroke="none"
-                    dot={<MakerSellDot />} name="Maker Sell (■)" isAnimationActive={false} />
-                  <Line type="monotone" dataKey={pk('taker_sell_price')} stroke="none"
-                    dot={<TakerSellDot />} name="Taker Sell (▼)" isAnimationActive={false} />
-                </>}
+                {/* SUBMISSION trades (always shown) */}
+                <Line type="monotone" dataKey="maker_buy_price" stroke="none"
+                  dot={<MakerBuyDot />} name="Maker Buy (■)" isAnimationActive={false} />
+                <Line type="monotone" dataKey="taker_buy_price" stroke="none"
+                  dot={<TakerBuyDot />} name="Taker Buy (▲)" isAnimationActive={false} />
+                <Line type="monotone" dataKey="maker_sell_price" stroke="none"
+                  dot={<MakerSellDot />} name="Maker Sell (■)" isAnimationActive={false} />
+                <Line type="monotone" dataKey="taker_sell_price" stroke="none"
+                  dot={<TakerSellDot />} name="Taker Sell (▼)" isAnimationActive={false} />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -570,20 +488,6 @@ function Dashboard({
                 <RechartsTooltip contentStyle={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px' }} formatter={(v: any) => [typeof v === 'number' ? v.toFixed(4) : 'N/A', 'Vol']} />
                 <Line type="monotone" dataKey="vol" stroke="#f97316" dot={false} strokeWidth={2} name="Rolling Vol" isAnimationActive={false} />
               </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* PnL per Timestep Histogram */}
-          <div className="glass-panel chart-container">
-            <h3 style={{ marginBottom: '1rem', color: 'var(--text-muted)' }}>PnL per Timestep Distribution</h3>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={metrics.histogram} margin={{ top: 5, right: 20, bottom: 20, left: 10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-                <XAxis dataKey="range" stroke="var(--text-muted)" fontSize={10} angle={-45} textAnchor="end" />
-                <YAxis stroke="var(--text-muted)" fontSize={12} width={40} />
-                <RechartsTooltip contentStyle={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px' }} />
-                <Bar dataKey="count" fill="var(--accent)" name="Count" radius={[3, 3, 0, 0]} />
-              </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
