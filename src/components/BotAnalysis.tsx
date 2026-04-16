@@ -146,11 +146,32 @@ export function BotAnalysis({ activities }: BotAnalysisProps) {
   return (
     <div className="glass-panel" style={{ marginTop: '1.5rem' }}>
       <h2 style={{ marginBottom: '0.5rem' }}>Informed Trader Detection</h2>
-      <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
-        Inferred from order book snapshots — tracks ask levels that disappeared (aggressive buys)
-        and bid levels that disappeared (aggressive sells). X-axis shows where each aggressive
-        order landed in the day's price range.
-      </p>
+      <details style={{ marginBottom: '1.5rem' }}>
+        <summary style={{ color: 'var(--text-muted)', fontSize: '0.85rem', cursor: 'pointer', userSelect: 'none' }}>
+          How to read this chart ▾
+        </summary>
+        <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', marginTop: '0.75rem', lineHeight: 1.6 }}>
+          <p style={{ marginBottom: '0.5rem' }}>
+            Each dot represents an aggressive order inferred from the order book —
+            when an ask level disappears between timesteps, a bot aggressively bought there (green dot).
+            When a bid level disappears, a bot aggressively sold there (red dot).
+          </p>
+          <p style={{ marginBottom: '0.5rem' }}>
+            The x-axis shows WHERE in that day's price range the order happened:
+          </p>
+          <ul style={{ marginLeft: '1.25rem', marginBottom: '0.5rem' }}>
+            <li>0% = the day's lowest price</li>
+            <li>100% = the day's highest price</li>
+            <li>50% = exactly the middle of the day's range</li>
+          </ul>
+          <p style={{ marginBottom: '0.25rem' }}>What patterns mean:</p>
+          <ul style={{ marginLeft: '1.25rem' }}>
+            <li>Green dots clustered LEFT + red dots clustered RIGHT → buy low, sell high → informed/directional trader (like "Olivia" from Frankfurt's writeup)</li>
+            <li>Green dots clustered RIGHT + red dots clustered LEFT → buy high, sell low → mean reversion bot enforcing fair value</li>
+            <li>Dots spread evenly across both colors → no pattern → passive market maker</li>
+          </ul>
+        </div>
+      </details>
 
       {!result || result.totalCount < 20 ? (
         <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem 0', fontSize: '0.9rem' }}>
@@ -160,7 +181,7 @@ export function BotAnalysis({ activities }: BotAnalysisProps) {
       ) : (
         <>
           {/* Stat chips */}
-          <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap', overflow: 'visible' }}>
             <div className="glass-panel" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
               <span style={{ color: 'var(--text-muted)' }}>Avg Buy Percentile</span>
               <span style={{ marginLeft: '0.5rem', fontWeight: 700, color: 'var(--emerald)' }}>
@@ -188,6 +209,7 @@ export function BotAnalysis({ activities }: BotAnalysisProps) {
           </div>
 
           {/* Scatter plot */}
+          <div style={{ paddingTop: '2rem', paddingLeft: '1rem', paddingRight: '1rem' }}>
           <ResponsiveContainer width="100%" height={250}>
             <ScatterChart margin={{ top: 10, right: 20, bottom: 35, left: 0 }}>
               <XAxis
@@ -238,6 +260,7 @@ export function BotAnalysis({ activities }: BotAnalysisProps) {
               <Scatter name="Inferred Sells" data={result.sells} fill="#ef4444" opacity={0.6} r={3} />
             </ScatterChart>
           </ResponsiveContainer>
+          </div>
 
           {/* Summary */}
           <p style={{ fontSize: '0.9rem', marginTop: '1rem', color: scoreColor }}>
