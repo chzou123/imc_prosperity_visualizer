@@ -235,24 +235,17 @@ function Dashboard({
     [traderStatsMap]
   );
 
-  // Y-axis domain for the price chart — excludes zero-price rows (blank order book snapshots)
+  // Y-axis domain: mean of mid_price ± 2 std devs, so small moves aren't flat lines
   const priceDomain = useMemo((): [number, number] | ['auto', 'auto'] => {
     if (normalizeMode !== 'none') return ['auto', 'auto'];
-    let min = Infinity, max = -Infinity;
-    for (const row of baseActivities) {
-      for (const p of [
-        row.bid_price_1, row.bid_price_2, row.bid_price_3,
-        row.ask_price_1, row.ask_price_2, row.ask_price_3,
-      ]) {
-        if (p != null && typeof p === 'number' && p > 0) {
-          if (p < min) min = p;
-          if (p > max) max = p;
-        }
-      }
-    }
-    if (!isFinite(min)) return ['auto', 'auto'];
-    const pad = Math.max((max - min) * 0.08, 5);
-    return [Math.floor(min - pad), Math.ceil(max + pad)];
+    const mids = baseActivities
+      .map(r => r.mid_price)
+      .filter((p): p is number => p != null && p > 0);
+    if (mids.length === 0) return ['auto', 'auto'];
+    const mean = mids.reduce((s, v) => s + v, 0) / mids.length;
+    const std = Math.sqrt(mids.reduce((s, v) => s + (v - mean) ** 2, 0) / mids.length);
+    const pad = Math.max(std * 2, 5);
+    return [Math.floor(mean - pad), Math.ceil(mean + pad)];
   }, [baseActivities, normalizeMode]);
 
   // Enriched activities with Wall Mid, market trades, normalization
