@@ -3,273 +3,253 @@ import {
   ScatterChart, Scatter, XAxis, YAxis,
   Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceLine,
 } from 'recharts';
-import { Trade, ActivityRow } from '../utils/parser';
-import { TraderStats } from '../utils/analytics';
+import { ActivityRow } from '../utils/parser';
 
 interface BotAnalysisProps {
-  trades: Trade[];
   activities: ActivityRow[];
-  traderStats: Map<string, TraderStats>;
 }
 
-const CLASS_COLORS: Record<string, string> = {
-  F: '#38bdf8', M: '#10b981', B: '#8b5cf6', I: '#f59e0b', S: '#94a3b8',
-};
-const CLASS_LABELS: Record<string, string> = {
-  F: 'Firm', M: 'Market Maker', B: 'Big Taker', I: 'Informed', S: 'Small',
-};
-
-// Golden-ratio deterministic jitter: maps index i to a value in [-1, 1]
-function goldenJitter(i: number): number {
-  return ((i * 0.618033988749895) % 1) * 2 - 1;
+interface InferredTrade {
+  timestamp: number;
+  price: number;
+  side: 'buy' | 'sell';
+  quantity: number;
 }
 
-export function BotAnalysis({ trades, traderStats }: BotAnalysisProps) {
-  console.log('[BotAnalysis] trades received:', trades.length, '| traderStats size:', traderStats.size);
-  if (trades.length > 0) console.log('[BotAnalysis] sample trade:', trades[0]);
-
-  const traderCharts = useMemo(() => {
-    if (trades.length === 0) return [];
-
-    const allPrices = trades.map(t => t.price);
-    const minP = Math.min(...allPrices);
-    const maxP = Math.max(...allPrices);
-    const pRange = maxP - minP;
-
-    const toPercentile = (price: number) =>
-      pRange > 0 ? ((price - minP) / pRange) * 100 : 50;
-
-    return Array.from(traderStats.values())
-      .filter(s => s.traderId !== 'SUBMISSION')
-      .map(s => {
-        const traderTrades = trades.filter(
-          t => t.buyer === s.traderId || t.seller === s.traderId
-        );
-
-        const buys: { x: number; y: number }[] = [];
-        const sells: { x: number; y: number }[] = [];
-
-        let buyIdx = 0;
-        let sellIdx = 0;
-        for (const t of traderTrades) {
-          const x = toPercentile(t.price);
-          if (t.buyer === s.traderId) {
-            buys.push({ x, y: goldenJitter(buyIdx++) });
-          }
-          if (t.seller === s.traderId) {
-            sells.push({ x, y: goldenJitter(sellIdx++) });
-          }
-        }
-
-        const avgBuyPct =
-          buys.length > 0
-            ? buys.reduce((acc, p) => acc + p.x, 0) / buys.length
-            : 50;
-        const avgSellPct =
-          sells.length > 0
-            ? sells.reduce((acc, p) => acc + p.x, 0) / sells.length
-            : 50;
-
-        let label: string;
-        let summaryColor: string;
-        if (avgBuyPct < 35 && avgSellPct > 65) {
-          label = 'likely informed';
-          summaryColor = 'var(--yellow)';
-        } else if (
-          Math.abs(avgBuyPct - 50) < 20 &&
-          Math.abs(avgSellPct - 50) < 20
-        ) {
-          label = 'likely market maker';
-          summaryColor = 'var(--accent)';
-        } else {
-          label = 'no clear pattern';
-          summaryColor = 'var(--text-muted)';
-        }
-
-        const summary = `Buys avg at ${avgBuyPct.toFixed(0)}th percentile, sells avg at ${avgSellPct.toFixed(0)}th percentile — ${label}`;
-
-        return {
-          traderId: s.traderId,
-          traderClass: s.traderClass,
-          buys,
-          sells,
-          avgBuyPct,
-          avgSellPct,
-          summary,
-          summaryColor,
-          informedScore: avgSellPct - avgBuyPct,
-        };
-      })
-      .sort((a, b) => b.informedScore - a.informedScore);
-  }, [trades, traderStats]);
-
-  if (traderCharts.length === 0) {
-    const msg = trades.length === 0
-      ? 'No trade history found for this product. The log file may not include a tradeHistory section, or trades may be under a different product name. Check the browser console for debug output.'
-      : 'All trades belong to SUBMISSION — no other market participant trades to analyze.';
-    return (
-      <div
-        className="glass-panel"
-        style={{
-          marginTop: '1.5rem',
-          color: 'var(--text-muted)',
-          textAlign: 'center',
-          padding: '2rem',
-          fontSize: '0.9rem',
-        }}
-      >
-        {msg}
-      </div>
-    );
+function buildLevelMap(
+  p1: number | undefined, v1: number | undefined,
+  p2: number | undefined, v2: number | undefined,
+  p3: number | undefined, v3: number | undefined,
+): Map<number, number> {
+  const m = new Map<number, number>();
+  const pairs: [number | undefined, number | undefined][] = [[p1, v1], [p2, v2], [p3, v3]];
+  for (const [p, v] of pairs) {
+    if (p != null && p > 0 && v != null && v > 0) m.set(p, v);
   }
+  return m;
+}
+
+const TooltipContent = ({ active, payload }: any) => {
+  if (!active || !payload?.length) return null;
+  const x: number = payload[0]?.payload?.x;
+  if (x == null) return null;
+  return (
+    <div style={{
+      background: 'var(--bg-card)', border: '1px solid var(--border)',
+      borderRadius: '8px', padding: '0.4rem 0.75rem', fontSize: '0.8rem',
+    }}>
+      {x.toFixed(1)}th percentile
+    </div>
+  );
+};
+
+export function BotAnalysis({ activities }: BotAnalysisProps) {
+  const result = useMemo(() => {
+    if (activities.length < 2) return null;
+
+    // ── Step 1: Infer trades from order book deltas ───────────────────────────
+    const inferredTrades: InferredTrade[] = [];
+
+    for (let i = 1; i < activities.length; i++) {
+      const prev = activities[i - 1];
+      const curr = activities[i];
+
+      const prevBids = buildLevelMap(
+        prev.bid_price_1, prev.bid_volume_1,
+        prev.bid_price_2, prev.bid_volume_2,
+        prev.bid_price_3, prev.bid_volume_3,
+      );
+      const currBids = buildLevelMap(
+        curr.bid_price_1, curr.bid_volume_1,
+        curr.bid_price_2, curr.bid_volume_2,
+        curr.bid_price_3, curr.bid_volume_3,
+      );
+      const prevAsks = buildLevelMap(
+        prev.ask_price_1, prev.ask_volume_1,
+        prev.ask_price_2, prev.ask_volume_2,
+        prev.ask_price_3, prev.ask_volume_3,
+      );
+      const currAsks = buildLevelMap(
+        curr.ask_price_1, curr.ask_volume_1,
+        curr.ask_price_2, curr.ask_volume_2,
+        curr.ask_price_3, curr.ask_volume_3,
+      );
+
+      // Lifted asks → inferred aggressive buy
+      for (const [price, prevVol] of prevAsks) {
+        const currVol = currAsks.get(price) ?? 0;
+        if (currVol < prevVol) {
+          inferredTrades.push({ timestamp: curr.timestamp, price, side: 'buy', quantity: prevVol - currVol });
+        }
+      }
+
+      // Hit bids → inferred aggressive sell
+      for (const [price, prevVol] of prevBids) {
+        const currVol = currBids.get(price) ?? 0;
+        if (currVol < prevVol) {
+          inferredTrades.push({ timestamp: curr.timestamp, price, side: 'sell', quantity: prevVol - currVol });
+        }
+      }
+    }
+
+    // ── Step 2: Running min/max per day (detect day by timestamp reset) ───────
+    const runningStats = new Map<number, { min: number; max: number }>();
+    let runningMin = Infinity;
+    let runningMax = -Infinity;
+    let prevTs = -Infinity;
+
+    for (const row of activities) {
+      if (row.timestamp < prevTs) {
+        // New day — reset
+        runningMin = Infinity;
+        runningMax = -Infinity;
+      }
+      prevTs = row.timestamp;
+      const mid = row.mid_price;
+      if (mid != null && mid > 0) {
+        if (mid < runningMin) runningMin = mid;
+        if (mid > runningMax) runningMax = mid;
+      }
+      runningStats.set(row.timestamp, { min: runningMin, max: runningMax });
+    }
+
+    // ── Step 3: Compute percentiles and aggregate ─────────────────────────────
+    const toPercentile = (price: number, timestamp: number): number => {
+      const stats = runningStats.get(timestamp);
+      if (!stats || !isFinite(stats.min) || stats.min === stats.max) return 50;
+      return Math.max(0, Math.min(100, (price - stats.min) / (stats.max - stats.min) * 100));
+    };
+
+    const buys: { x: number; y: number }[] = [];
+    const sells: { x: number; y: number }[] = [];
+
+    for (const t of inferredTrades) {
+      const x = toPercentile(t.price, t.timestamp);
+      const y = Math.random() * 0.5;
+      if (t.side === 'buy') buys.push({ x, y });
+      else sells.push({ x, y });
+    }
+
+    const avgBuyPct = buys.length > 0 ? buys.reduce((s, p) => s + p.x, 0) / buys.length : 50;
+    const avgSellPct = sells.length > 0 ? sells.reduce((s, p) => s + p.x, 0) / sells.length : 50;
+    const informedScore = avgSellPct - avgBuyPct;
+
+    return { buys, sells, avgBuyPct, avgSellPct, informedScore, totalCount: inferredTrades.length };
+  }, [activities]);
+
+  const scoreColor = !result || result.informedScore > 40
+    ? 'var(--emerald)'
+    : result.informedScore < -40
+    ? 'var(--tomato)'
+    : 'var(--text-muted)';
 
   return (
     <div className="glass-panel" style={{ marginTop: '1.5rem' }}>
       <h2 style={{ marginBottom: '0.5rem' }}>Informed Trader Detection</h2>
-      <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '2rem' }}>
-        Does this bot buy near daily lows and sell near daily highs? Each strip shows where each
-        trader's buys (green) and sells (red) land across the day's price range (0% = daily low,
-        100% = daily high). Sorted by most informed-looking first.
+      <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', marginBottom: '1.5rem' }}>
+        Inferred from order book snapshots — tracks ask levels that disappeared (aggressive buys)
+        and bid levels that disappeared (aggressive sells). X-axis shows where each aggressive
+        order landed in the day's price range.
       </p>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))',
-          gap: '1.5rem',
-        }}
-      >
-        {traderCharts.map(trader => (
-          <div key={trader.traderId} className="glass-panel" style={{ padding: '1rem' }}>
-            {/* Header */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-                marginBottom: '0.75rem',
-                flexWrap: 'wrap',
-              }}
-            >
-              <span style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: '0.95rem' }}>
-                {trader.traderId}
-              </span>
-              <span
-                style={{
-                  color: CLASS_COLORS[trader.traderClass] ?? '#94a3b8',
-                  fontSize: '0.75rem',
-                  background: `${CLASS_COLORS[trader.traderClass] ?? '#94a3b8'}22`,
-                  padding: '0.15rem 0.5rem',
-                  borderRadius: '4px',
-                  fontWeight: 600,
-                }}
-              >
-                {trader.traderClass} — {CLASS_LABELS[trader.traderClass] ?? trader.traderClass}
-              </span>
-              <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginLeft: 'auto' }}>
-                {trader.buys.length}B / {trader.sells.length}S trades
+      {!result || result.totalCount < 20 ? (
+        <p style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem 0', fontSize: '0.9rem' }}>
+          Not enough order book activity to detect patterns
+          {result ? ` (${result.totalCount} inferred trades, need at least 20)` : ''}.
+        </p>
+      ) : (
+        <>
+          {/* Stat chips */}
+          <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
+            <div className="glass-panel" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Avg Buy Percentile</span>
+              <span style={{ marginLeft: '0.5rem', fontWeight: 700, color: 'var(--emerald)' }}>
+                {result.avgBuyPct.toFixed(0)}th
               </span>
             </div>
-
-            {/* Scatter strip chart */}
-            <ResponsiveContainer width="100%" height={120}>
-              <ScatterChart margin={{ top: 5, right: 15, bottom: 20, left: 0 }}>
-                <XAxis
-                  dataKey="x"
-                  type="number"
-                  domain={[0, 100]}
-                  ticks={[0, 25, 50, 75, 100]}
-                  tickFormatter={v => `${v}%`}
-                  fontSize={11}
-                  stroke="var(--text-muted)"
-                  label={{
-                    value: 'Price percentile (0% = daily low, 100% = daily high)',
-                    position: 'insideBottom',
-                    offset: -12,
-                    fontSize: 10,
-                    fill: 'var(--text-muted)',
-                  }}
-                />
-                <YAxis
-                  dataKey="y"
-                  type="number"
-                  domain={[-1.2, 1.2]}
-                  hide
-                />
-                <RechartsTooltip
-                  cursor={false}
-                  contentStyle={{
-                    backgroundColor: 'var(--bg-card)',
-                    border: '1px solid var(--border)',
-                    borderRadius: '8px',
-                    fontSize: '0.8rem',
-                  }}
-                  formatter={(val: number, name: string) =>
-                    name === 'x' ? [`${val.toFixed(1)}th percentile`, 'Price'] : [null, null]
-                  }
-                  labelFormatter={() => ''}
-                />
-                {/* Avg buy line */}
-                {trader.buys.length > 0 && (
-                  <ReferenceLine
-                    x={trader.avgBuyPct}
-                    stroke="#10b981"
-                    strokeDasharray="3 2"
-                    strokeWidth={1.5}
-                    label={{
-                      value: `↑${trader.avgBuyPct.toFixed(0)}%`,
-                      position: 'top',
-                      fontSize: 10,
-                      fill: '#10b981',
-                    }}
-                  />
-                )}
-                {/* Avg sell line */}
-                {trader.sells.length > 0 && (
-                  <ReferenceLine
-                    x={trader.avgSellPct}
-                    stroke="#ef4444"
-                    strokeDasharray="3 2"
-                    strokeWidth={1.5}
-                    label={{
-                      value: `↓${trader.avgSellPct.toFixed(0)}%`,
-                      position: 'top',
-                      fontSize: 10,
-                      fill: '#ef4444',
-                    }}
-                  />
-                )}
-                <Scatter
-                  name="Buys"
-                  data={trader.buys}
-                  fill="#10b981"
-                  opacity={0.65}
-                  r={3}
-                />
-                <Scatter
-                  name="Sells"
-                  data={trader.sells}
-                  fill="#ef4444"
-                  opacity={0.65}
-                  r={3}
-                />
-              </ScatterChart>
-            </ResponsiveContainer>
-
-            {/* Summary line */}
-            <p
-              style={{
-                fontSize: '0.8rem',
-                color: trader.summaryColor,
-                marginTop: '0.25rem',
-                marginBottom: 0,
-              }}
-            >
-              {trader.summary}
-            </p>
+            <div className="glass-panel" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Avg Sell Percentile</span>
+              <span style={{ marginLeft: '0.5rem', fontWeight: 700, color: 'var(--tomato)' }}>
+                {result.avgSellPct.toFixed(0)}th
+              </span>
+            </div>
+            <div className="glass-panel" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Informed Score</span>
+              <span style={{ marginLeft: '0.5rem', fontWeight: 700, color: scoreColor }}>
+                {result.informedScore.toFixed(1)}
+              </span>
+            </div>
+            <div className="glass-panel" style={{ padding: '0.5rem 1rem', fontSize: '0.85rem' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Inferred Trades</span>
+              <span style={{ marginLeft: '0.5rem', fontWeight: 700 }}>
+                {result.buys.length}B / {result.sells.length}S
+              </span>
+            </div>
           </div>
-        ))}
-      </div>
+
+          {/* Scatter plot */}
+          <ResponsiveContainer width="100%" height={250}>
+            <ScatterChart margin={{ top: 10, right: 20, bottom: 35, left: 0 }}>
+              <XAxis
+                dataKey="x"
+                type="number"
+                domain={[0, 100]}
+                ticks={[0, 25, 50, 75, 100]}
+                tickFormatter={v => `${v}%`}
+                fontSize={11}
+                stroke="var(--text-muted)"
+                label={{
+                  value: '0 = day low  →  100 = day high',
+                  position: 'insideBottom',
+                  offset: -20,
+                  fontSize: 11,
+                  fill: 'var(--text-muted)',
+                }}
+              />
+              <YAxis dataKey="y" type="number" domain={[0, 0.6]} hide />
+              <RechartsTooltip content={<TooltipContent />} cursor={false} />
+
+              {/* 50% midpoint reference */}
+              <ReferenceLine x={50} stroke="var(--border)" strokeWidth={1.5} />
+
+              {/* Avg buy percentile */}
+              {result.buys.length > 0 && (
+                <ReferenceLine
+                  x={result.avgBuyPct}
+                  stroke="#10b981"
+                  strokeDasharray="4 2"
+                  strokeWidth={1.5}
+                  label={{ value: `↑${result.avgBuyPct.toFixed(0)}%`, position: 'top', fontSize: 10, fill: '#10b981' }}
+                />
+              )}
+
+              {/* Avg sell percentile */}
+              {result.sells.length > 0 && (
+                <ReferenceLine
+                  x={result.avgSellPct}
+                  stroke="#ef4444"
+                  strokeDasharray="4 2"
+                  strokeWidth={1.5}
+                  label={{ value: `↓${result.avgSellPct.toFixed(0)}%`, position: 'top', fontSize: 10, fill: '#ef4444' }}
+                />
+              )}
+
+              <Scatter name="Inferred Buys" data={result.buys} fill="#10b981" opacity={0.6} r={3} />
+              <Scatter name="Inferred Sells" data={result.sells} fill="#ef4444" opacity={0.6} r={3} />
+            </ScatterChart>
+          </ResponsiveContainer>
+
+          {/* Summary */}
+          <p style={{ fontSize: '0.9rem', marginTop: '1rem', color: scoreColor }}>
+            {result.informedScore > 40
+              ? <>Aggressive orders cluster low for buys and high for sells — <strong>informed/directional trader pattern detected</strong></>
+              : result.informedScore < -40
+              ? <>Aggressive orders cluster high for buys and low for sells — <strong>possible mean-reversion bot</strong></>
+              : <>Aggressive orders spread evenly across the price range — <strong>no clear informed pattern</strong></>
+            }
+          </p>
+        </>
+      )}
     </div>
   );
 }

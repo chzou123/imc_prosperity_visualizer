@@ -492,11 +492,7 @@ function Dashboard({ data, activeProduct, setActiveProduct, setData }: Dashboard
         </div>
 
         {/* ── Bot Analysis ── */}
-        <BotAnalysis
-          trades={activeTrades}
-          activities={baseActivities}
-          traderStats={traderStatsMap}
-        />
+        <BotAnalysis activities={baseActivities} />
       </div>
     </div>
   );
