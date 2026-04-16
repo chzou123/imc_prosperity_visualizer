@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useRef, useState, useEffect } from 'react';
 import {
   ScatterChart, Scatter, XAxis, YAxis,
   Tooltip as RechartsTooltip, ResponsiveContainer, ReferenceLine,
@@ -137,6 +137,22 @@ export function BotAnalysis({ activities }: BotAnalysisProps) {
     return { buys, sells, avgBuyPct, avgSellPct, informedScore, totalCount: inferredTrades.length };
   }, [activities]);
 
+  const chartWrapperRef = useRef<HTMLDivElement>(null);
+  const [chartWidth, setChartWidth] = useState(0);
+
+  useEffect(() => {
+    const el = chartWrapperRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(entries => {
+      setChartWidth(entries[0].contentRect.width);
+    });
+    ro.observe(el);
+    setChartWidth(el.getBoundingClientRect().width);
+    return () => ro.disconnect();
+  }, []);
+
+  const CHART_RIGHT_MARGIN = 20;
+
   const scoreColor = !result || result.informedScore > 40
     ? 'var(--emerald)'
     : result.informedScore < -40
@@ -209,57 +225,86 @@ export function BotAnalysis({ activities }: BotAnalysisProps) {
           </div>
 
           {/* Scatter plot */}
-          <div style={{ paddingTop: '2rem', paddingLeft: '1rem', paddingRight: '1rem' }}>
-          <ResponsiveContainer width="100%" height={250}>
-            <ScatterChart margin={{ top: 10, right: 20, bottom: 35, left: 0 }}>
-              <XAxis
-                dataKey="x"
-                type="number"
-                domain={[0, 100]}
-                ticks={[0, 25, 50, 75, 100]}
-                tickFormatter={v => `${v}%`}
-                fontSize={11}
-                stroke="var(--text-muted)"
-                label={{
-                  value: '0 = day low  →  100 = day high',
-                  position: 'insideBottom',
-                  offset: -20,
-                  fontSize: 11,
-                  fill: 'var(--text-muted)',
-                }}
-              />
-              <YAxis dataKey="y" type="number" domain={[0, 0.6]} hide />
-              <RechartsTooltip content={<TooltipContent />} cursor={false} />
-
-              {/* 50% midpoint reference */}
-              <ReferenceLine x={50} stroke="var(--border)" strokeWidth={1.5} />
-
-              {/* Avg buy percentile */}
-              {result.buys.length > 0 && (
-                <ReferenceLine
-                  x={result.avgBuyPct}
-                  stroke="#10b981"
-                  strokeDasharray="4 2"
-                  strokeWidth={1.5}
-                  label={{ value: `↑${result.avgBuyPct.toFixed(0)}%`, position: 'top', fontSize: 10, fill: '#10b981' }}
+          <div ref={chartWrapperRef} style={{ position: 'relative', paddingTop: '2rem' }}>
+            {/* DOM annotation labels — rendered outside the SVG so they can never be clipped */}
+            {result.buys.length > 0 && chartWidth > 0 && (
+              <div style={{
+                position: 'absolute',
+                top: '2px',
+                left: `${(result.avgBuyPct / 100) * (chartWidth - CHART_RIGHT_MARGIN)}px`,
+                transform: 'translateX(-50%)',
+                fontSize: '10px',
+                color: '#10b981',
+                fontWeight: 600,
+                pointerEvents: 'none',
+                whiteSpace: 'nowrap',
+              }}>
+                ↑{result.avgBuyPct.toFixed(0)}%
+              </div>
+            )}
+            {result.sells.length > 0 && chartWidth > 0 && (
+              <div style={{
+                position: 'absolute',
+                top: '2px',
+                left: `${(result.avgSellPct / 100) * (chartWidth - CHART_RIGHT_MARGIN)}px`,
+                transform: 'translateX(-50%)',
+                fontSize: '10px',
+                color: '#ef4444',
+                fontWeight: 600,
+                pointerEvents: 'none',
+                whiteSpace: 'nowrap',
+              }}>
+                ↓{result.avgSellPct.toFixed(0)}%
+              </div>
+            )}
+            <ResponsiveContainer width="100%" height={250}>
+              <ScatterChart margin={{ top: 10, right: CHART_RIGHT_MARGIN, bottom: 35, left: 0 }}>
+                <XAxis
+                  dataKey="x"
+                  type="number"
+                  domain={[0, 100]}
+                  ticks={[0, 25, 50, 75, 100]}
+                  tickFormatter={v => `${v}%`}
+                  fontSize={11}
+                  stroke="var(--text-muted)"
+                  label={{
+                    value: '0 = day low  →  100 = day high',
+                    position: 'insideBottom',
+                    offset: -20,
+                    fontSize: 11,
+                    fill: 'var(--text-muted)',
+                  }}
                 />
-              )}
+                <YAxis dataKey="y" type="number" domain={[0, 0.6]} hide />
+                <RechartsTooltip content={<TooltipContent />} cursor={false} />
 
-              {/* Avg sell percentile */}
-              {result.sells.length > 0 && (
-                <ReferenceLine
-                  x={result.avgSellPct}
-                  stroke="#ef4444"
-                  strokeDasharray="4 2"
-                  strokeWidth={1.5}
-                  label={{ value: `↓${result.avgSellPct.toFixed(0)}%`, position: 'top', fontSize: 10, fill: '#ef4444' }}
-                />
-              )}
+                {/* 50% midpoint reference */}
+                <ReferenceLine x={50} stroke="var(--border)" strokeWidth={1.5} />
 
-              <Scatter name="Inferred Buys" data={result.buys} fill="#10b981" opacity={0.6} r={3} />
-              <Scatter name="Inferred Sells" data={result.sells} fill="#ef4444" opacity={0.6} r={3} />
-            </ScatterChart>
-          </ResponsiveContainer>
+                {/* Avg buy percentile — dashed line only, label is a DOM div above */}
+                {result.buys.length > 0 && (
+                  <ReferenceLine
+                    x={result.avgBuyPct}
+                    stroke="#10b981"
+                    strokeDasharray="4 2"
+                    strokeWidth={1.5}
+                  />
+                )}
+
+                {/* Avg sell percentile — dashed line only, label is a DOM div above */}
+                {result.sells.length > 0 && (
+                  <ReferenceLine
+                    x={result.avgSellPct}
+                    stroke="#ef4444"
+                    strokeDasharray="4 2"
+                    strokeWidth={1.5}
+                  />
+                )}
+
+                <Scatter name="Inferred Buys" data={result.buys} fill="#10b981" opacity={0.6} r={3} />
+                <Scatter name="Inferred Sells" data={result.sells} fill="#ef4444" opacity={0.6} r={3} />
+              </ScatterChart>
+            </ResponsiveContainer>
           </div>
 
           {/* Summary */}
