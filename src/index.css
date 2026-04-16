@@ -210,3 +210,50 @@ h1, h2, h3 {
 
 .stat-value.up { color: var(--emerald); }
 .stat-value.down { color: var(--tomato); }
+
+/* ── Bot Analysis Tables ────────────────────────────────────────────── */
+.analysis-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.analysis-table th,
+.analysis-table td {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.analysis-table th {
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.analysis-table tr {
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+
+.analysis-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.analysis-table tr:last-child {
+  border-bottom: none;
+}
+
+/* ── Range input ────────────────────────────────────────────────────── */
+input[type="range"] {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* ── Select button ──────────────────────────────────────────────────── */
+select.btn {
+  appearance: none;
+  -webkit-appearance: none;
+}
