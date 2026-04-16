@@ -204,6 +204,12 @@ function Dashboard({
   const pnl = data.pnl[activeProduct] || [];
   const activeTrades = data.trades[activeProduct] || [];
 
+  // Debug: log trade data to help diagnose Bot Analysis empty state
+  console.log('[Prosperity] activeProduct:', activeProduct);
+  console.log('[Prosperity] data.trades keys:', Object.keys(data.trades));
+  console.log('[Prosperity] activeTrades.length:', activeTrades.length);
+  if (activeTrades.length > 0) console.log('[Prosperity] sample trade:', activeTrades[0]);
+
   // Trader classification
   const traderStatsMap = useMemo<Map<string, TraderStats>>(
     () => classifyTraders(activeTrades, baseActivities),
@@ -479,7 +485,7 @@ function Dashboard({
               <ComposedChart data={activities} syncId="prosperitySync">
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                 <XAxis dataKey="timestamp" stroke="var(--text-muted)" fontSize={12} scale="time" type="number" domain={['dataMin', 'dataMax']} />
-                <YAxis domain={priceDomain} stroke="var(--text-muted)" fontSize={12} width={70} />
+                <YAxis domain={priceDomain} allowDataOverflow={true} stroke="var(--text-muted)" fontSize={12} width={70} />
                 <RechartsTooltip content={<DepthTooltip />} />
                 <Legend />
 

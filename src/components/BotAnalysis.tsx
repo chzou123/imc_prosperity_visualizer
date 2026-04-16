@@ -25,6 +25,9 @@ function goldenJitter(i: number): number {
 }
 
 export function BotAnalysis({ trades, traderStats }: BotAnalysisProps) {
+  console.log('[BotAnalysis] trades received:', trades.length, '| traderStats size:', traderStats.size);
+  if (trades.length > 0) console.log('[BotAnalysis] sample trade:', trades[0]);
+
   const traderCharts = useMemo(() => {
     if (trades.length === 0) return [];
 
@@ -101,6 +104,9 @@ export function BotAnalysis({ trades, traderStats }: BotAnalysisProps) {
   }, [trades, traderStats]);
 
   if (traderCharts.length === 0) {
+    const msg = trades.length === 0
+      ? 'No trade history found for this product. The log file may not include a tradeHistory section, or trades may be under a different product name. Check the browser console for debug output.'
+      : 'All trades belong to SUBMISSION — no other market participant trades to analyze.';
     return (
       <div
         className="glass-panel"
@@ -109,9 +115,10 @@ export function BotAnalysis({ trades, traderStats }: BotAnalysisProps) {
           color: 'var(--text-muted)',
           textAlign: 'center',
           padding: '2rem',
+          fontSize: '0.9rem',
         }}
       >
-        No market participant data available for analysis.
+        {msg}
       </div>
     );
   }

@@ -59,8 +59,21 @@ export async function parseZipLog(file: File): Promise<ParsedData> {
   // Parse root level JSON
   const parsedRoot = JSON.parse(logFileContent);
   
-  let activitiesData = parsedRoot.activitiesLog || "";
-  let tradeHistory = parsedRoot.tradeHistory || [];
+  // Try multiple key names used across different Prosperity log formats
+  let activitiesData: string =
+    parsedRoot.activitiesLog ||
+    parsedRoot.activities_log ||
+    parsedRoot.activities ||
+    "";
+  const tradeHistory: Record<string, unknown>[] =
+    parsedRoot.tradeHistory ||
+    parsedRoot.trade_history ||
+    parsedRoot.trades ||
+    [];
+
+  console.log('[Parser] activitiesData length:', activitiesData.length);
+  console.log('[Parser] tradeHistory length:', tradeHistory.length);
+  if (tradeHistory.length > 0) console.log('[Parser] sample trade entry:', tradeHistory[0]);
   
   // Fast parse CSV with papaparse
   const parsedCsv = Papa.parse(activitiesData, {
@@ -91,14 +104,30 @@ export async function parseZipLog(file: File): Promise<ParsedData> {
   for (const p of products) tradesMap[p] = [];
   
   // Inject new products found only in trades
+  // Try multiple field names for the product symbol
   for (const t of tradeHistory) {
-    if (!productsSet.has(t.symbol)) {
-      productsSet.add(t.symbol);
-      products.push(t.symbol);
-      tradesMap[t.symbol] = [];
+    const rawSym = (t.symbol ?? t.product ?? t.instrument ?? '') as string;
+    if (!rawSym) continue; // skip malformed entries
+
+    // Case-insensitive match against known products first
+    const matchedSym =
+      Array.from(productsSet).find(p => p.toLowerCase() === rawSym.toLowerCase()) ?? rawSym;
+
+    if (!productsSet.has(matchedSym)) {
+      productsSet.add(matchedSym);
+      products.push(matchedSym);
+      tradesMap[matchedSym] = [];
     }
-    if (!tradesMap[t.symbol]) tradesMap[t.symbol] = [];
-    tradesMap[t.symbol].push(t);
+    if (!tradesMap[matchedSym]) tradesMap[matchedSym] = [];
+    tradesMap[matchedSym].push({
+      timestamp: Number(t.timestamp ?? 0),
+      buyer: String(t.buyer ?? ''),
+      seller: String(t.seller ?? ''),
+      symbol: matchedSym,
+      currency: String(t.currency ?? ''),
+      price: Number(t.price ?? 0),
+      quantity: Number(t.quantity ?? 0),
+    });
   }
   
   const positions: { [product: string]: { timestamp: number, quantity: number }[] } = {};
