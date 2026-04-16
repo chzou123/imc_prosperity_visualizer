@@ -7,7 +7,7 @@ import {
 } from 'recharts';
 import { parseZipLog, ParsedData } from './utils/parser';
 import {
-  computeWallMid, classifyTraders, computeSharpe,
+  classifyTraders, computeSharpe,
   computeRollingVolatility, computeTotalVolatility,
   computeMaxDrawdown, computeWinRate,
   TraderStats,
@@ -192,6 +192,7 @@ function Dashboard({ data, activeProduct, setActiveProduct, setData }: Dashboard
   const [showBids, setShowBids] = useState(true);
   const [showAsks, setShowAsks] = useState(true);
   const [showMid, setShowMid] = useState(true);
+  const [showTrades, setShowTrades] = useState(true);
 
   // Trader classification (for BotAnalysis)
   const traderStatsMap = useMemo<Map<string, TraderStats>>(
@@ -264,9 +265,6 @@ function Dashboard({ data, activeProduct, setActiveProduct, setData }: Dashboard
     const makerSellPrice = makerSellVol > 0 ? makerSellCost / makerSellVol : null;
     const takerSellPrice = takerSellVol > 0 ? takerSellCost / takerSellVol : null;
 
-    // Wall Mid
-    const { wall_mid } = computeWallMid(act);
-
     // Market trades: all non-SUBMISSION crosses (always shown, vwap per timestep)
     const marketTrades = tradesAtTime.filter(
       t => t.buyer !== 'SUBMISSION' && t.seller !== 'SUBMISSION'
@@ -286,7 +284,6 @@ function Dashboard({ data, activeProduct, setActiveProduct, setData }: Dashboard
       maker_sell_price: makerSellPrice,
       taker_sell_vol: takerSellVol,
       taker_sell_price: takerSellPrice,
-      wall_mid,
       market_trade_price,
       rolling_vol: metrics.rollingVol[i] ?? null,
     };
@@ -333,6 +330,11 @@ function Dashboard({ data, activeProduct, setActiveProduct, setData }: Dashboard
               style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
               onClick={() => setShowMid(v => !v)}
             >Mid</button>
+            <button
+              className={`btn ${showTrades ? 'active' : ''}`}
+              style={{ padding: '0.25rem 0.6rem', fontSize: '0.8rem' }}
+              onClick={() => setShowTrades(v => !v)}
+            >Trades</button>
           </div>
 
           <button className="btn" onClick={() => setData(null)} style={{ marginLeft: 'auto' }}>Upload New Run</button>
@@ -413,9 +415,6 @@ function Dashboard({ data, activeProduct, setActiveProduct, setData }: Dashboard
                   <Line type="stepAfter" dataKey="mid_price" stroke="var(--accent)" dot={false} strokeWidth={2} name="Mid Price" isAnimationActive={false} />
                 )}
 
-                {/* Wall Mid (always shown) */}
-                <Line type="stepAfter" dataKey="wall_mid" stroke="#f97316" dot={false} strokeWidth={1.5} strokeDasharray="5 3" name="Wall Mid" isAnimationActive={false} />
-
                 {/* Bid levels */}
                 {showBids && <>
                   <Line type="stepAfter" dataKey="bid_price_1" stroke="var(--emerald)" dot={false} strokeWidth={2} name="Bid 1" isAnimationActive={false} />
@@ -423,19 +422,19 @@ function Dashboard({ data, activeProduct, setActiveProduct, setData }: Dashboard
                   <Line type="stepAfter" dataKey="bid_price_3" stroke="rgba(16,185,129,0.4)" dot={false} strokeWidth={1} name="Bid 3" isAnimationActive={false} />
                 </>}
 
-                {/* Market trades (non-SUBMISSION, always shown) */}
-                <Line type="monotone" dataKey="market_trade_price" stroke="none"
-                  dot={<MarketTradeDot />} name="Market Trade (✕)" isAnimationActive={false} />
-
-                {/* SUBMISSION trades (always shown) */}
-                <Line type="monotone" dataKey="maker_buy_price" stroke="none"
-                  dot={<MakerBuyDot />} name="Maker Buy (■)" isAnimationActive={false} />
-                <Line type="monotone" dataKey="taker_buy_price" stroke="none"
-                  dot={<TakerBuyDot />} name="Taker Buy (▲)" isAnimationActive={false} />
-                <Line type="monotone" dataKey="maker_sell_price" stroke="none"
-                  dot={<MakerSellDot />} name="Maker Sell (■)" isAnimationActive={false} />
-                <Line type="monotone" dataKey="taker_sell_price" stroke="none"
-                  dot={<TakerSellDot />} name="Taker Sell (▼)" isAnimationActive={false} />
+                {/* All trade markers toggled together */}
+                {showTrades && <>
+                  <Line type="monotone" dataKey="market_trade_price" stroke="none"
+                    dot={<MarketTradeDot />} name="Market Trade (✕)" isAnimationActive={false} />
+                  <Line type="monotone" dataKey="maker_buy_price" stroke="none"
+                    dot={<MakerBuyDot />} name="Maker Buy (■)" isAnimationActive={false} />
+                  <Line type="monotone" dataKey="taker_buy_price" stroke="none"
+                    dot={<TakerBuyDot />} name="Taker Buy (▲)" isAnimationActive={false} />
+                  <Line type="monotone" dataKey="maker_sell_price" stroke="none"
+                    dot={<MakerSellDot />} name="Maker Sell (■)" isAnimationActive={false} />
+                  <Line type="monotone" dataKey="taker_sell_price" stroke="none"
+                    dot={<TakerSellDot />} name="Taker Sell (▼)" isAnimationActive={false} />
+                </>}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
